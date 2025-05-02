@@ -83,8 +83,8 @@ def main():
     print("✅ Batch update complete.")
 
 if __name__ == "__main__":
-    script = "https://script.google.com/macros/s/AKfycbzpMZGPduBMNJsX_8pafv7RUVosMNqj23gp4o2A1m_354o1vjIC2iQ-eTDM1Ch38LhM/exec"
+    script = "https://script.google.com/macros/s/AKfycby0LqBVCPoRzYQU2kw60y2t0syBK2REkDdVDZl5aLjhgAkNfdRSq4FLrcy9-PTK2JRK/exec"
     main()
-    response = requests.post(script_url, json={"action": "manualSync"})
+    response = requests.post(script, json={"action": "manualSync"})
     print(response.text)
     
