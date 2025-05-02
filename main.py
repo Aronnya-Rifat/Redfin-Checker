@@ -1,16 +1,15 @@
-import os
-import time
-import logging
-import requests
 import pandas as pd
+import requests
+import time
 from lxml import html
 import gspread
+import os
+import json
 from oauth2client.service_account import ServiceAccountCredentials
 
 # === CONFIGURATION ===
-GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
-WORKSHEET_NAME = os.getenv('WORKSHEET_NAME', 'listings to submit')
-CREDENTIALS_FILE = os.getenv('CREDENTIALS_FILE', 'credentials.json')
+GOOGLE_SHEET_ID = os.environ.get('GOOGLE_SHEET_ID')
+WORKSHEET_NAME = os.environ.get('WORKSHEET_NAME', 'listings to submit')
 URL_COLUMN = 'URL'
 STATUS_COLUMN = 'Live Status'
 
@@ -21,58 +20,67 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-logging.basicConfig(level=logging.INFO)
-
+# === Get Listing Status from Redfin Page ===
 def get_redfin_status(url):
     try:
         res = requests.get(url, headers=HEADERS, timeout=15)
-        res.raise_for_status()
         tree = html.fromstring(res.content)
         status = tree.xpath('//*[@id="content"]/div[8]/div[2]/div[1]/div[1]/section/div/div/div/div[1]/div[1]/span/text()')
-        return status[0].strip() if status else 'Unknown'
+        if status:
+            return status[0].strip()
+        else:
+            return 'Unknown'
     except Exception as e:
-        logging.error(f"Failed to get status for {url}: {e}")
         return 'Error'
 
+# === Main Script ===
 def main():
-    try:
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-        client = gspread.authorize(creds)
+    # Auth using credentials from environment variable
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    credentials_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if not credentials_json:
+        print("❌ GOOGLE_CREDENTIALS_JSON environment variable not found.")
+        return
 
-        worksheet = client.open_by_key(GOOGLE_SHEET_ID).worksheet(WORKSHEET_NAME)
-        data = worksheet.get_all_values()
-        headers = data[0]
-        df = pd.DataFrame(data[1:], columns=headers)
+    creds_dict = json.loads(credentials_json)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
 
-        if URL_COLUMN not in df.columns:
-            logging.error(f"Missing column: {URL_COLUMN}")
-            return
+    # Open Sheet and Tab
+    worksheet = client.open_by_key(GOOGLE_SHEET_ID).worksheet(WORKSHEET_NAME)
+    data = worksheet.get_all_values()
+    headers = data[0]
+    df = pd.DataFrame(data[1:], columns=headers)
 
-        if STATUS_COLUMN not in df.columns:
-            logging.info(f"Adding missing column: {STATUS_COLUMN}")
-            worksheet.update_cell(1, len(headers) + 1, STATUS_COLUMN)
-            df[STATUS_COLUMN] = ''
-            status_col_index = len(headers)
-        else:
-            status_col_index = df.columns.get_loc(STATUS_COLUMN)
+    # Ensure required columns exist
+    if URL_COLUMN not in df.columns:
+        print(f"❌ Missing column: {URL_COLUMN}")
+        return
 
-        statuses = []
-        for url in df[URL_COLUMN]:
-            status = get_redfin_status(url)
-            logging.info(f"{url} -> {status}")
-            statuses.append(status)
-            time.sleep(1)
+    if STATUS_COLUMN not in df.columns:
+        print(f"➕ Adding missing column: {STATUS_COLUMN}")
+        worksheet.update_cell(1, len(headers) + 1, STATUS_COLUMN)
+        df[STATUS_COLUMN] = ''
+        status_col_index = len(headers)  # zero-based
+    else:
+        status_col_index = df.columns.get_loc(STATUS_COLUMN)
 
-        cell_range = f"{chr(65 + status_col_index)}2:{chr(65 + status_col_index)}{len(statuses) + 1}"
-        cell_list = worksheet.range(cell_range)
-        for i, cell in enumerate(cell_list):
-            cell.value = statuses[i]
-        worksheet.update_cells(cell_list)
+    # Process Redfin URLs
+    statuses = []
+    for url in df[URL_COLUMN]:
+        status = get_redfin_status(url)
+        print(f"{url} -> {status}")
+        statuses.append(status)
+        time.sleep(1)  # polite delay
 
-        logging.info("✅ Batch update complete.")
-    except Exception as e:
-        logging.critical(f"Unexpected error in main(): {e}", exc_info=True)
+    # === Batch Update ===
+    cell_range = f"{chr(65 + status_col_index)}2:{chr(65 + status_col_index)}{len(statuses) + 1}"
+    cell_list = worksheet.range(cell_range)
+    for i, cell in enumerate(cell_list):
+        cell.value = statuses[i]
+    worksheet.update_cells(cell_list)
+
+    print("✅ Batch update complete.")
 
 if __name__ == "__main__":
     main()
